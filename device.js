@@ -1,11 +1,14 @@
-const ZKLib = require("zkteco-js");
-const DEVICE_IP = '192.168.1.199'
-zk = new ZKLib(DEVICE_IP, 4370, 10000);
+const ZKLib = require("zkteco");
+const DEVICE_IP = '192.168.18.2'
+zk = new ZKLib([{ deviceIp: DEVICE_IP, devicePort: "4370" }]);
 
 const connection = async () => {
+    const CMD = {
+        CMD_STARTENROLL: '003d'
+    }
     try {
-        await zk.createSocket();
-        attendance = await zk.getAttendances()
+        await zk.connectAll();
+        attendance = await zk.getAttendances(DEVICE_IP)
         console.log(attendance)
     } catch (err) {
         connected = false;

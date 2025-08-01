@@ -3,8 +3,7 @@ const { open } = require('sqlite')
 const axios = require('axios');
 const ZKLib = require("zkteco");
 const moment = require("moment");
-const SERVER_URL = 'https://localhost:5000/api/biometric-attendance'
-// const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
+const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
 const https = require('https');
 const { EventLogger } = require('node-windows');
 const log = new EventLogger('zk-agent');
@@ -36,9 +35,9 @@ async function deviceConn() {
     try {
         await zk.connectAll();
         connected = true;
-        console.log("TCP connection successful");
+        log.info("TCP connection successful");
     } catch (err) {
-        console.log("Failed to connect to ZKTeco device: ", err.code);
+        log.info("Failed to connect to ZKTeco device: ", err.code);
         return;
     }
 }
@@ -94,7 +93,7 @@ async function run() {
         const time = await withTimeout(zk.zklibTcp.getTime(DEVICE_IP), 3000, 'Device not responding');
         if(!time) throw Error('Ping failed or timed out')
     } catch (err) {
-        console.log('Ping failed or timed out:', err.message);
+        log.info('Ping failed or timed out:', err.message);
         zk = null;
         connected = false;
         return;
@@ -138,28 +137,28 @@ async function run() {
     }
     fAttendance.sort((a, b) => new Date(b.record_time) - new Date(a.record_time));
 
-    // if(fAttendance.length){
-    //     const _attendance = fAttendance.slice(0,chunkSize)
-    //     const params = {gymId: GYM_ID, deviceBrand: DEVICE_BRAND, attendance:_attendance}
-    //     axios.post(SERVER_URL,params,{httpsAgent}).then(async (e) => {
-    //         if(e.data.status){
-    //             const promises = []
-    //             for (const att of _attendance) {
-    //                 if(UPDATE[att.sn]){
-    //                     promises.push(updateRow(db, att))
-    //                 } else {
-    //                     promises.push(insertRow(db, att))
-    //                 }
-    //             }
-    //             await Promise.all(promises)
-    //         }
-    //     }).catch((e) => {
-    //         console.log('failed to push to cloudfitnest server: '+e.message)
-    //     })
-    // }
-    console.log('fetched att: '+attendance.length)
     if(fAttendance.length){
-        console.log('new att: '+fAttendance.length)
+        const _attendance = fAttendance.slice(0,chunkSize)
+        const params = {gymId: GYM_ID, deviceBrand: DEVICE_BRAND, attendance:_attendance}
+        axios.post(SERVER_URL,params,{httpsAgent}).then(async (e) => {
+            if(e.data.status){
+                const promises = []
+                for (const att of _attendance) {
+                    if(UPDATE[att.sn]){
+                        promises.push(updateRow(db, att))
+                    } else {
+                        promises.push(insertRow(db, att))
+                    }
+                }
+                await Promise.all(promises)
+            }
+        }).catch((e) => {
+            log.info('failed to push to cloudfitnest server: '+e.message)
+        })
+    }
+    log.info('fetched att: '+attendance.length)
+    if(fAttendance.length){
+        log.info('new att: '+fAttendance.length)
     }
 }
 // Poll every 10 seconds
@@ -167,7 +166,7 @@ async function scheduleRun() {
     try {
         await run();
     } catch (e) {
-        console.log("Run failed: " + e.message);
+        log.info("Run failed: " + e.message);
     } finally {
         setTimeout(scheduleRun, 10000);  // Always schedule the next run
     }
@@ -176,7 +175,7 @@ async function scheduleRun() {
 scheduleRun();
 
 process.on('SIGINT', async () => {
-    console.log('Shutting down...');
+    log.info('Shutting down...');
     if (zk && connected) await zk.disconnect();
     process.exit(0);
 });
