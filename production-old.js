@@ -1,20 +1,19 @@
+const sqlite3 = require('sqlite3').verbose()
+const { open } = require('sqlite')
 const axios = require('axios');
-const ZKLib = require('./node-zklib/zklib.js')
+const ZKLib = require("zkteco");
 const moment = require("moment");
-// const SERVER_URL = 'https://localhost:5000/api/biometric-attendance'
 const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
 const https = require('https');
 const { EventLogger } = require('node-windows');
 const log = new EventLogger('zk-agent');
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-const path = require('path');
-const Database = require('better-sqlite3');
 
 /**
- * Changes based on gym
- * */
-const DEVICE_IP = '192.168.18.198'
-const GYM_ID = '428b1f68-47c6-4ff7-a252-4249693af862'
+* Changes based on gym
+* */
+const DEVICE_IP = '192.168.1.198'
+const GYM_ID = '42b8ef69-4812-45d7-8192-e9cd0a64669c'
 const DEVICE_BRAND = 'zkteco'
 const INSTALLATION_DATE = '2025-08-01'
 
@@ -22,26 +21,19 @@ let zk, attendance = [], chunkSize = 15, connected = false, tableCreated = false
 
 async function dbConn() {
     if (db) return db;
-
-    const dbPath = path.resolve(__dirname, "database.sqlite");
-    db = new Database(dbPath);
+    db = await open({
+        filename: './database.sqlite',
+        driver: sqlite3.cached.Database
+    });
     return db;
 }
 
 async function deviceConn() {
-    if (zk) {
-        try {
-            zk.socket?.removeAllListeners(); // <-- cleanup old listeners
-            await zk.disconnect();
-        } catch (e) {}
-        zk = null;
-    }
-
+    if (zk) return;
     connected = false;
-    zk = new ZKLib(DEVICE_IP, 4370, 10000, 4000);
-
+    zk = new ZKLib([{ deviceIp: DEVICE_IP, devicePort: "4370" }]);
     try {
-        await zk.createSocket();
+        await zk.connectAll();
         connected = true;
         log.info("TCP connection successful");
     } catch (err) {
@@ -49,32 +41,35 @@ async function deviceConn() {
         return;
     }
 }
-function createTable() {
-    db.prepare(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sn INT UNIQUE,
-      state INT,
-      user_id INT,
-      bio_date DATE
-    )
-  `).run();
+
+async function createTable(db) {
+    await db.run(`
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sn INT UNIQUE,
+            state INT,
+            user_id INT,
+            bio_date DATE
+        )
+    `)
 }
 
-function getRow(sn) {
-    return db.prepare(`SELECT * FROM attendance WHERE sn = ?`).get(sn);
+async function getRow(db,sn) {
+    return db.get(`SELECT * FROM attendance WHERE sn = ?`, [sn]);
 }
 
-async function insertRow({sn,state,userId,bioDate}) {
-    return db.prepare(
-        `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`
-    ).run(sn, state, userId, bioDate);
+async function insertRow(db,{sn,state,userId,bioDate}) {
+    return db.run(
+            `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`,
+        [sn, state, userId, bioDate]
+    );
 }
 
-async function updateRow({sn,state,userId,bioDate}) {
-    return db.prepare(
-        `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`
-    ).run(state, userId, bioDate, sn);
+async function updateRow(db,{sn,state,userId,bioDate}) {
+    return db.run(
+            `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`,
+        [state, userId, bioDate, sn]
+    );
 }
 
 function withTimeout(promise, ms, errorMessage = 'Timeout') {
@@ -95,7 +90,7 @@ async function run() {
     }
 
     try {
-        const time = await withTimeout(zk.getInfo(DEVICE_IP), 3000, 'Device not responding');
+        const time = await withTimeout(zk.zklibTcp.getTime(DEVICE_IP), 3000, 'Device not responding');
         if(!time) throw Error('Ping failed or timed out')
     } catch (err) {
         log.info('Ping failed or timed out:', err.message);
@@ -111,8 +106,8 @@ async function run() {
     const UPDATE = {}
 
     try {
-        attendance = await zk.getAttendances()
-        attendance = attendance?.data
+        attendance = await zk.getAttendances(DEVICE_IP)
+        attendance = Array.isArray(attendance) ? attendance : []
     } catch (e) {
         zk = null;
         connected = false;
@@ -132,7 +127,7 @@ async function run() {
         if (bioDate < INSTALLATION_DATE) {
             continue;
         }
-        const dbRow = await getRow(Number(sn))
+        const dbRow = await getRow(db,Number(sn))
         if(dbRow?.user_id === Number(user_id) && dbRow.state === Number(state) && dbRow.bio_date === bioDate){
             continue
         }else if(dbRow) {
@@ -150,9 +145,9 @@ async function run() {
                 const promises = []
                 for (const att of _attendance) {
                     if(UPDATE[att.sn]){
-                        promises.push(updateRow(att))
+                        promises.push(updateRow(db, att))
                     } else {
-                        promises.push(insertRow(att))
+                        promises.push(insertRow(db, att))
                     }
                 }
                 await Promise.all(promises)
@@ -161,7 +156,7 @@ async function run() {
             log.info('failed to push to cloudfitnest server: '+e.message)
         })
     }
-    log.info('fetched att: '+attendance.length)
+    //log.info('fetched att: '+attendance.length)
     if(fAttendance.length){
         log.info('new att: '+fAttendance.length)
     }
@@ -184,3 +179,7 @@ process.on('SIGINT', async () => {
     if (zk && connected) await zk.disconnect();
     process.exit(0);
 });
+
+setInterval(async () => {
+    if (db) await db.run("VACUUM");
+}, 12 * 60 * 60 * 1000); // Every 12 hours

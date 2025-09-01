@@ -1,40 +1,47 @@
-const sqlite3 = require('sqlite3').verbose()
-const { open } = require('sqlite')
 const axios = require('axios');
-const ZKLib = require("zkteco");
+const ZKLib = require('./node-zklib/zklib.js')
 const moment = require("moment");
-const SERVER_URL = 'https://localhost:5000/api/biometric-attendance'
-// const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
+// const SERVER_URL = 'https://localhost:5000/api/biometric-attendance'
+const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
 const https = require('https');
 const { EventLogger } = require('node-windows');
 const log = new EventLogger('zk-agent');
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+const path = require('path');
+const Database = require('better-sqlite3');
 
 /**
-* Changes based on gym
-* */
-const DEVICE_IP = '192.168.18.2'
-const GYM_ID = '11ab66c5-ffe1-4825-822b-16c4147b5172'
+ * Changes based on gym
+ * */
+const DEVICE_IP = '192.168.1.198'
+const GYM_ID = '428b1f68-47c6-4ff7-a252-4249693af862'
 const DEVICE_BRAND = 'zkteco'
-const INSTALLATION_DATE = '2025-07-28'
+const INSTALLATION_DATE = '2025-08-01'
 
 let zk, attendance = [], chunkSize = 15, connected = false, tableCreated = false, db = null
 
 async function dbConn() {
     if (db) return db;
-    db = await open({
-        filename: './database.sqlite',
-        driver: sqlite3.cached.Database
-    });
+
+    const dbPath = path.resolve(__dirname, "database.sqlite");
+    db = new Database(dbPath);
     return db;
 }
 
 async function deviceConn() {
-    if (zk) return;
+    if (zk) {
+        try {
+            zk.socket?.removeAllListeners(); // <-- cleanup old listeners
+            await zk.disconnect();
+        } catch (e) {}
+        zk = null;
+    }
+
     connected = false;
-    zk = new ZKLib([{ deviceIp: DEVICE_IP, devicePort: "4370" }]);
+    zk = new ZKLib(DEVICE_IP, 4370, 10000, 4000);
+
     try {
-        await zk.connectAll();
+        await zk.createSocket();
         connected = true;
         console.log("TCP connection successful");
     } catch (err) {
@@ -43,34 +50,32 @@ async function deviceConn() {
     }
 }
 
-async function createTable(db) {
-    await db.run(`
-        CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sn INT UNIQUE,
-            state INT,
-            user_id INT,
-            bio_date DATE
-        )
-    `)
+function createTable() {
+    db.prepare(`
+    CREATE TABLE IF NOT EXISTS attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sn INT UNIQUE,
+      state INT,
+      user_id INT,
+      bio_date DATE
+    )
+  `).run();
 }
 
-async function getRow(db,sn) {
-    return db.get(`SELECT * FROM attendance WHERE sn = ?`, [sn]);
+function getRow(sn) {
+    return db.prepare(`SELECT * FROM attendance WHERE sn = ?`).get(sn);
 }
 
-async function insertRow(db,{sn,state,userId,bioDate}) {
-    return db.run(
-            `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`,
-        [sn, state, userId, bioDate]
-    );
+async function insertRow({sn,state,userId,bioDate}) {
+    return db.prepare(
+            `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`
+    ).run(sn, state, userId, bioDate);
 }
 
-async function updateRow(db,{sn,state,userId,bioDate}) {
-    return db.run(
-            `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`,
-        [state, userId, bioDate, sn]
-    );
+async function updateRow({sn,state,userId,bioDate}) {
+    return db.prepare(
+            `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`
+    ).run(state, userId, bioDate, sn);
 }
 
 function withTimeout(promise, ms, errorMessage = 'Timeout') {
@@ -91,7 +96,7 @@ async function run() {
     }
 
     try {
-        const time = await withTimeout(zk.zklibTcp.getTime(DEVICE_IP), 3000, 'Device not responding');
+        const time = await withTimeout(zk.getInfo(DEVICE_IP), 3000, 'Device not responding');
         if(!time) throw Error('Ping failed or timed out')
     } catch (err) {
         console.log('Ping failed or timed out:', err.message);
@@ -107,8 +112,8 @@ async function run() {
     const UPDATE = {}
 
     try {
-        attendance = await zk.getAttendances(DEVICE_IP)
-        attendance = Array.isArray(attendance) ? attendance : []
+        attendance = await zk.getAttendances()
+        attendance = attendance?.data
     } catch (e) {
         zk = null;
         connected = false;
@@ -128,7 +133,7 @@ async function run() {
         if (bioDate < INSTALLATION_DATE) {
             continue;
         }
-        const dbRow = await getRow(db,Number(sn))
+        const dbRow = await getRow(Number(sn))
         if(dbRow?.user_id === Number(user_id) && dbRow.state === Number(state) && dbRow.bio_date === bioDate){
             continue
         }else if(dbRow) {
@@ -138,25 +143,25 @@ async function run() {
     }
     fAttendance.sort((a, b) => new Date(b.record_time) - new Date(a.record_time));
 
-    // if(fAttendance.length){
-    //     const _attendance = fAttendance.slice(0,chunkSize)
-    //     const params = {gymId: GYM_ID, deviceBrand: DEVICE_BRAND, attendance:_attendance}
-    //     axios.post(SERVER_URL,params,{httpsAgent}).then(async (e) => {
-    //         if(e.data.status){
-    //             const promises = []
-    //             for (const att of _attendance) {
-    //                 if(UPDATE[att.sn]){
-    //                     promises.push(updateRow(db, att))
-    //                 } else {
-    //                     promises.push(insertRow(db, att))
-    //                 }
-    //             }
-    //             await Promise.all(promises)
-    //         }
-    //     }).catch((e) => {
-    //         console.log('failed to push to cloudfitnest server: '+e.message)
-    //     })
-    // }
+    if(fAttendance.length){
+        const _attendance = fAttendance.slice(0,chunkSize)
+        const params = {gymId: GYM_ID, deviceBrand: DEVICE_BRAND, attendance:_attendance}
+        axios.post(SERVER_URL,params,{httpsAgent}).then(async (e) => {
+            if(e.data.status){
+                const promises = []
+                for (const att of _attendance) {
+                    if(UPDATE[att.sn]){
+                        promises.push(updateRow(att))
+                    } else {
+                        promises.push(insertRow(att))
+                    }
+                }
+                await Promise.all(promises)
+            }
+        }).catch((e) => {
+            console.log('failed to push to cloudfitnest server: '+e.message)
+        })
+    }
     console.log('fetched att: '+attendance.length)
     if(fAttendance.length){
         console.log('new att: '+fAttendance.length)
@@ -167,7 +172,8 @@ async function scheduleRun() {
     try {
         await run();
     } catch (e) {
-        console.log("Run failed: " + e.message);
+        // console.log("Run failed: " + e.message);
+        console.log(e);
     } finally {
         setTimeout(scheduleRun, 10000);  // Always schedule the next run
     }
@@ -180,7 +186,3 @@ process.on('SIGINT', async () => {
     if (zk && connected) await zk.disconnect();
     process.exit(0);
 });
-
-setInterval(async () => {
-    if (db) await db.run("VACUUM");
-}, 12 * 60 * 60 * 1000); // Every 12 hours

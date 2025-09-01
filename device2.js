@@ -1,3 +1,5 @@
+const sqlite3 = require('sqlite3').verbose()
+const { open } = require('sqlite')
 const axios = require('axios');
 const ZKLib = require('./node-zklib/zklib.js')
 const moment = require("moment");
@@ -8,7 +10,7 @@ const { EventLogger } = require('node-windows');
 const log = new EventLogger('zk-agent');
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 const path = require('path');
-const Database = require('better-sqlite3');
+const basePath = process.pkg ? path.dirname(process.execPath) : process.cwd();
 
 /**
  * Changes based on gym
@@ -22,59 +24,55 @@ let zk, attendance = [], chunkSize = 15, connected = false, tableCreated = false
 
 async function dbConn() {
     if (db) return db;
-
-    const dbPath = path.resolve(__dirname, "database.sqlite");
-    db = new Database(dbPath);
+    db = await open({
+        filename: path.resolve(basePath, 'database.sqlite'),
+        driver: sqlite3.cached.Database
+    });
     return db;
 }
 
 async function deviceConn() {
-    if (zk) {
-        try {
-            zk.socket?.removeAllListeners(); // <-- cleanup old listeners
-            await zk.disconnect();
-        } catch (e) {}
-        zk = null;
-    }
-
+    if (zk) return;
     connected = false;
     zk = new ZKLib(DEVICE_IP, 4370, 10000, 4000);
-
     try {
-        await zk.createSocket();
+        await zk.createSocket()
         connected = true;
-        log.info("TCP connection successful");
+        console.log("TCP connection successful");
     } catch (err) {
-        log.info("Failed to connect to ZKTeco device: ", err.code);
+        console.log("Failed to connect to ZKTeco device: ", err.code);
         return;
     }
 }
-function createTable() {
-    db.prepare(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sn INT UNIQUE,
-      state INT,
-      user_id INT,
-      bio_date DATE
-    )
-  `).run();
+
+async function createTable(db) {
+    await db.run(`
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sn INT UNIQUE,
+            state INT,
+            user_id INT,
+            bio_date DATE
+        )
+    `)
 }
 
-function getRow(sn) {
-    return db.prepare(`SELECT * FROM attendance WHERE sn = ?`).get(sn);
+async function getRow(db,sn) {
+    return db.get(`SELECT * FROM attendance WHERE sn = ?`, [sn]);
 }
 
-async function insertRow({sn,state,userId,bioDate}) {
-    return db.prepare(
-        `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`
-    ).run(sn, state, userId, bioDate);
+async function insertRow(db,{sn,state,userId,bioDate}) {
+    return db.run(
+        `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`,
+        [sn, state, userId, bioDate]
+    );
 }
 
-async function updateRow({sn,state,userId,bioDate}) {
-    return db.prepare(
-        `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`
-    ).run(state, userId, bioDate, sn);
+async function updateRow(db,{sn,state,userId,bioDate}) {
+    return db.run(
+        `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`,
+        [state, userId, bioDate, sn]
+    );
 }
 
 function withTimeout(promise, ms, errorMessage = 'Timeout') {
@@ -98,7 +96,7 @@ async function run() {
         const time = await withTimeout(zk.getInfo(DEVICE_IP), 3000, 'Device not responding');
         if(!time) throw Error('Ping failed or timed out')
     } catch (err) {
-        log.info('Ping failed or timed out:', err.message);
+        console.log('Ping failed or timed out:', err.message);
         zk = null;
         connected = false;
         return;
@@ -132,7 +130,7 @@ async function run() {
         if (bioDate < INSTALLATION_DATE) {
             continue;
         }
-        const dbRow = await getRow(Number(sn))
+        const dbRow = await getRow(db,Number(sn))
         if(dbRow?.user_id === Number(user_id) && dbRow.state === Number(state) && dbRow.bio_date === bioDate){
             continue
         }else if(dbRow) {
@@ -141,7 +139,6 @@ async function run() {
         fAttendance.push({ sn, type, state, userId:user_id, bioDate, bioTime, record_time })
     }
     fAttendance.sort((a, b) => new Date(b.record_time) - new Date(a.record_time));
-
     if(fAttendance.length){
         const _attendance = fAttendance.slice(0,chunkSize)
         const params = {gymId: GYM_ID, deviceBrand: DEVICE_BRAND, attendance:_attendance}
@@ -150,20 +147,20 @@ async function run() {
                 const promises = []
                 for (const att of _attendance) {
                     if(UPDATE[att.sn]){
-                        promises.push(updateRow(att))
+                        promises.push(updateRow(db, att))
                     } else {
-                        promises.push(insertRow(att))
+                        promises.push(insertRow(db, att))
                     }
                 }
                 await Promise.all(promises)
             }
         }).catch((e) => {
-            log.info('failed to push to cloudfitnest server: '+e.message)
+            console.log('failed to push to cloudfitnest server: '+e.message)
         })
     }
-    log.info('fetched att: '+attendance.length)
+    console.log('fetched att: '+attendance.length)
     if(fAttendance.length){
-        log.info('new att: '+fAttendance.length)
+        console.log('new att: '+fAttendance.length)
     }
 }
 // Poll every 10 seconds
@@ -171,7 +168,7 @@ async function scheduleRun() {
     try {
         await run();
     } catch (e) {
-        log.info("Run failed: " + e.message);
+        console.log("Run failed: " + e.message);
     } finally {
         setTimeout(scheduleRun, 10000);  // Always schedule the next run
     }
@@ -180,7 +177,11 @@ async function scheduleRun() {
 scheduleRun();
 
 process.on('SIGINT', async () => {
-    log.info('Shutting down...');
+    console.log('Shutting down...');
     if (zk && connected) await zk.disconnect();
     process.exit(0);
 });
+
+setInterval(async () => {
+    if (db) await db.run("VACUUM");
+}, 12 * 60 * 60 * 1000); // Every 12 hours
