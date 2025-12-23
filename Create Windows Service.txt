@@ -1,0 +1,46 @@
+========================
+Step 1 - Install node dependency
+========================
+
+npm install -g pkg
+pkg production.js --targets node18-win-x64 --output zk-agent.exe
+
+Note: server.js file here is being packaged. Output file is zk-agent.exe
+
+====================================================
+Step 2 - Download nssm(Non-Sucking Service Manager)
+====================================================
+
+https://nssm.cc/download (Download the latest version)
+Use 64-bit nssm.exe.
+Keep nssm.exe and zk-agent.exe in same directory and run:
+
+nssm install zk-agent
+
+Add path and subdirectory such as:
+
+Path: F:\Development\biometric\zk-agent.exe
+Startup directory: F:\Development\biometric
+
+Finally, click install service
+
+You can also edit the path: 
+
+nssm edit zk-agent
+
+========================
+Step 3 - Run Service
+========================
+
+Go Win + R and type services.ssc. locate zk-agent → start it.
+
+sc failure "zk-agent" reset= 60 actions= restart/5000
+
+In case you want to delete services file, use administrator privelges and run cmd command:
+
+
+========================
+Delete Service
+========================
+
+sc delete zk-agent
