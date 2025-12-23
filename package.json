@@ -8,21 +8,16 @@
     "dev": "nodemon server.js",
     "start": "node server.js",
     "biometric": "node biometric.js",
+    "usersApi": "nodemon node-zklib/usersApi.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
-  "pkg": {
-    "assets": [
-      "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
-    ]
-  },
-
   "dependencies": {
     "axios": "^0.27.2",
-    "better-sqlite3": "^12.2.0",
     "buffer": "^6.0.3",
     "crypto": "^1.0.1",
+    "express": "^4.18.2",
     "http": "^0.0.1-security",
     "https": "^1.0.0",
     "moment": "^2.30.1",
@@ -31,6 +26,7 @@
     "nodemon": "^3.1.10",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
-    "zkteco": "^1.10.21"
+    "zkteco": "^1.10.21",
+    "zkteco-js": "^1.7.1"
   }
 }

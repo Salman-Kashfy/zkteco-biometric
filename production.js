@@ -1,30 +1,31 @@
 const axios = require('axios');
 const ZKLib = require('./node-zklib/zklib.js')
 const moment = require("moment");
-// const SERVER_URL = 'https://localhost:5000/api/biometric-attendance'
-const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
+const SERVER_URL = 'https://localhost:5000/api/biometric-attendance'
+//const SERVER_URL = 'https://api.cloudfitnest.com/api/biometric-attendance'
 const https = require('https');
 const { EventLogger } = require('node-windows');
 const log = new EventLogger('zk-agent');
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-const path = require('path');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose()
+const { open } = require('sqlite')
 
 /**
  * Changes based on gym
  * */
 const DEVICE_IP = '192.168.18.198'
-const GYM_ID = '428b1f68-47c6-4ff7-a252-4249693af862'
+const GYM_ID = '11ab66c5-ffe1-4825-822b-16c4147b5172'
 const DEVICE_BRAND = 'zkteco'
-const INSTALLATION_DATE = '2025-08-01'
+const INSTALLATION_DATE = '2025-11-04'
 
 let zk, attendance = [], chunkSize = 15, connected = false, tableCreated = false, db = null
 
 async function dbConn() {
     if (db) return db;
-
-    const dbPath = path.resolve(__dirname, "database.sqlite");
-    db = new Database(dbPath);
+    db = await open({
+        filename: './database.sqlite',
+        driver: sqlite3.cached.Database
+    });
     return db;
 }
 
@@ -43,38 +44,41 @@ async function deviceConn() {
     try {
         await zk.createSocket();
         connected = true;
-        log.info("TCP connection successful");
+        //log.info("TCP connection successful");
     } catch (err) {
         log.info("Failed to connect to ZKTeco device: ", err.code);
         return;
     }
 }
-function createTable() {
-    db.prepare(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sn INT UNIQUE,
-      state INT,
-      user_id INT,
-      bio_date DATE
-    )
-  `).run();
+
+async function createTable(db) {
+    await db.run(`
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sn INT UNIQUE,
+            state INT,
+            user_id INT,
+            bio_date DATE
+        )
+    `)
 }
 
-function getRow(sn) {
-    return db.prepare(`SELECT * FROM attendance WHERE sn = ?`).get(sn);
+async function getRow(sn) {
+    return db.get(`SELECT * FROM attendance WHERE sn = ?`, [sn]);
 }
 
 async function insertRow({sn,state,userId,bioDate}) {
-    return db.prepare(
-        `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`
-    ).run(sn, state, userId, bioDate);
+    return db.run(
+        `INSERT INTO attendance (sn, state, user_id, bio_date) VALUES (?, ?, ?, ?)`,
+        [sn, state, userId, bioDate]
+    );
 }
 
 async function updateRow({sn,state,userId,bioDate}) {
-    return db.prepare(
-        `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`
-    ).run(state, userId, bioDate, sn);
+    return db.run(
+        `UPDATE attendance SET state = ?, user_id = ?, bio_date = ? WHERE sn = ?`,
+        [state, userId, bioDate, sn]
+    );
 }
 
 function withTimeout(promise, ms, errorMessage = 'Timeout') {
@@ -161,9 +165,14 @@ async function run() {
             log.info('failed to push to cloudfitnest server: '+e.message)
         })
     }
-    log.info('fetched att: '+attendance.length)
+    //log.info('fetched att: '+attendance.length)
     if(fAttendance.length){
         log.info('new att: '+fAttendance.length)
+    }else{
+        if (fAttendance.length === 0 && attendance.length > 1000) {
+            await zk.clearAttendanceLog();
+            log.info("Cleared device logs after sync safety check");
+        }
     }
 }
 // Poll every 10 seconds
@@ -171,7 +180,8 @@ async function scheduleRun() {
     try {
         await run();
     } catch (e) {
-        log.info("Run failed: " + e.message);
+        // log.info("Run failed: " + e.message);
+        log.info(e);
     } finally {
         setTimeout(scheduleRun, 10000);  // Always schedule the next run
     }

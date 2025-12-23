@@ -122,23 +122,23 @@ module.exports.decodeUserData28 = (userData)=>{
 module.exports.decodeUserData72 = (userData)=>{
     const user = {
         uid: userData.readUIntLE(0, 2),
-        role: userData.readUIntLE(2, 1),
-        password: userData
-          .subarray(3, 3+8)
-          .toString('ascii')
-          .split('\0')
-          .shift(),
+        // role: userData.readUIntLE(2, 1),
+        // password: userData
+        //   .subarray(3, 3+8)
+        //   .toString('ascii')
+        //   .split('\0')
+        //   .shift(),
         name: userData
           .slice(11)
           .toString('ascii')
           .split('\0')
           .shift(),
-        cardno: userData.readUIntLE(35,4),
+        // cardno: userData.readUIntLE(35,4),
         userId: userData
           .slice(48, 48+9)
           .toString('ascii')
           .split('\0')
-          .shift(),
+          .shift()
       };
       return user;
 }

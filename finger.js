@@ -1,27 +1,32 @@
-const ZKTeco = require("zkteco");
+const Zkteco = require("zkteco-js");
 
-const DEVICE_IP = '192.168.18.2';
+const DEVICE_IP = '192.168.18.198';
 const DEVICE_PORT = 4370;
 
-async function enrollFingerprint(userId = 1, fingerId = 1) {
-    const devices = [{ deviceIp: DEVICE_IP, devicePort: DEVICE_PORT }];
-    const zk = new ZKTeco(devices);
+const manageZktecoDevice = async () => {
+    const device = new Zkteco(DEVICE_IP, 4370, 5200, 5000);
+
     try {
-        // 1. Connect to device
-        await zk.connectAll();
-        console.log('Connected successfully');
+        // Create socket connection to the device
+        await device.createSocket();
 
-        const devices = await zk.zklibTcp.getAllDevicces()
-        const device = devices[0]
+        const buffer = Buffer.alloc(10);
+        buffer.writeUInt8('49', 0); // uid (numeric)
+        buffer.writeUInt8('48', 1); // uid (numeric)
+        buffer.writeUInt8('48', 2); // uid (numeric)
 
-        const buffer = Buffer.alloc(4);       // Allocate 4 bytes
-        buffer.writeUInt32LE(userId, 0);      // Write user ID as little-endian
+        buffer.writeUInt8(2, 6);  // finger index (0-9)
+        buffer.writeUInt8(0, 7);                 // privilege = 0 (normal user)
+        buffer.writeUInt8(1, 8);                 // enabled = 1
 
-        const res = await zk.zklibTcp.executeCmd(device,61,buffer);
-        console.log({res});
-    } catch (err) {
-        console.error('Error during enrollment:', err);
-    } finally {}
-}
+        const res = await device.executeCmd('61',buffer)
+        console.log(res)
 
-enrollFingerprint(1, 1);
+        // Manually disconnect after using real-time logs
+        await device.disconnect();
+    } catch (error) {
+        console.error("Error:", error);
+    }
+};
+
+manageZktecoDevice();
