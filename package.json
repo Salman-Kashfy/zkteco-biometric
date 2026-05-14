@@ -9,10 +9,17 @@
     "start": "node server.js",
     "biometric": "node biometric.js",
     "usersApi": "nodemon node-zklib/usersApi.js",
+    "sync-pkg-native": "node scripts/sync-pkg-native.js",
+    "pkg:win": "npm run sync-pkg-native && pkg . --targets node18-win-x64 --output zk-agent.exe",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
+  "pkg": {
+    "assets": [
+      "pkg-native/node_sqlite3.node"
+    ]
+  },
   "dependencies": {
     "axios": "^0.27.2",
     "buffer": "^6.0.3",

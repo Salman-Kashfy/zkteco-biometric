@@ -1,3 +1,4 @@
+require('./pkg-sqlite3-bootstrap');
 const axios = require('axios');
 const ZKLib = require('./node-zklib/zklib.js')
 const moment = require("moment");
@@ -44,11 +45,16 @@ async function deviceConn() {
     try {
         await zk.createSocket();
         connected = true;
-        //log.info("TCP connection successful");
+        //_log("TCP connection successful");
     } catch (err) {
-        log.info("Failed to connect to ZKTeco device: ", err.code);
+        _log("Failed to connect to ZKTeco device: ", err.code);
         return;
     }
+}
+
+function _log(message, err){
+    log.info(message, err || '');
+    console.log(message, err || '');
 }
 
 async function createTable(db) {
@@ -102,7 +108,7 @@ async function run() {
         const time = await withTimeout(zk.getInfo(DEVICE_IP), 3000, 'Device not responding');
         if(!time) throw Error('Ping failed or timed out')
     } catch (err) {
-        log.info('Ping failed or timed out:', err.message);
+        _log('Ping failed or timed out:', err.message);
         zk = null;
         connected = false;
         return;
@@ -162,16 +168,16 @@ async function run() {
                 await Promise.all(promises)
             }
         }).catch((e) => {
-            log.info('failed to push to cloudfitnest server: '+e.message)
+            _log('failed to push to cloudfitnest server: '+e.message)
         })
     }
-    //log.info('fetched att: '+attendance.length)
+    //_log('fetched att: '+attendance.length)
     if(fAttendance.length){
-        log.info('new att: '+fAttendance.length)
+        _log('new att: '+fAttendance.length)
     }else{
         if (fAttendance.length === 0 && attendance.length > 1000) {
             await zk.clearAttendanceLog();
-            log.info("Cleared device logs after sync safety check");
+            _log("Cleared device logs after sync safety check");
         }
     }
 }
@@ -180,8 +186,8 @@ async function scheduleRun() {
     try {
         await run();
     } catch (e) {
-        // log.info("Run failed: " + e.message);
-        log.info(e);
+        // _log("Run failed: " + e.message);
+        _log(e);
     } finally {
         setTimeout(scheduleRun, 10000);  // Always schedule the next run
     }
@@ -190,7 +196,7 @@ async function scheduleRun() {
 scheduleRun();
 
 process.on('SIGINT', async () => {
-    log.info('Shutting down...');
+    _log('Shutting down...');
     if (zk && connected) await zk.disconnect();
     process.exit(0);
 });

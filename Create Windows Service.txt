@@ -1,12 +1,24 @@
 ========================
-Step 1 - Install node dependency
+Step 1 - Build zk-agent.exe (pkg + sqlite3)
 ========================
 
 npm install -g pkg
-pkg production.js --targets node18-win-x64 --output zk-agent.exe
 
-Note: server.js file here is being packaged. Output file is zk-agent.exe
+Do NOT add pkg-native/node_sqlite3.node to .gitignore — pkg skips gitignored files, so the native addon would be missing inside the exe.
 
+Use Node 18 when syncing/rebuilding sqlite3 (same ABI as node18-win-x64, module 108):
+
+  nvm use 18
+  npm rebuild sqlite3
+  npm run pkg:win
+
+(pkg:win = sync-pkg-native + pkg). You must run pkg against the project (package.json), not production.js alone — otherwise "pkg".assets from package.json are ignored and the sqlite3 native file is not embedded:
+
+  npm run sync-pkg-native && pkg . --targets node18-win-x64 --output zk-agent.exe
+
+If you ever need a manual fallback: copy folder pkg-native (with node_sqlite3.node) next to zk-agent.exe — the bootstrap checks there too.
+
+Output: zk-agent.exe
 ====================================================
 Step 2 - Download nssm(Non-Sucking Service Manager)
 ====================================================
